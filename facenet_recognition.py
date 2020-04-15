@@ -1,21 +1,17 @@
 import os
 import os.path
-import cv2
 import numpy as np
-from mtcnn import MTCNN
 from numpy import savez_compressed
 from numpy import load
 from numpy import expand_dims
 from keras.models import load_model
 from sklearn.svm import SVC 
 from sklearn.preprocessing import LabelEncoder
+from mtcnn import MTCNN
+import cv2
 
-#REQUIRED PIP INSTALLS:
-# opencv, numpy, mtcnn, keras, sklearn, tensorflow
-# requires python 3.6
-# requires numpy version 1.16.2, do pip install numpy==1.16.2
-
-#returns a cropped image of the face located in the file
+import time
+from picamera import PiCamera
 
 def get_face(file):
     IMAGE_SIZE = (160,160)
@@ -23,10 +19,12 @@ def get_face(file):
     img = cv2.cvtColor(cv2.imread(file),cv2.COLOR_BGR2RGB)
     faces = detector.detect_faces(img)
     if len(faces) < 1:
-        raise ValueError('No faces detected')
+        print('No faces detected')
+        return None
     x,y,width,height = faces[0]["box"]
     cropped = cv2.resize(img[y:y+height,x:x+width],IMAGE_SIZE)
     return cropped
+
 
 #standardize pixel values
 
@@ -103,57 +101,64 @@ def predict_face(encoder,svm,file,model):
 
 #gets the embedding with the shortest euclidian distance to the input image file
 
-def lowest_euclidian_distance(file,model):
-    face = get_face(file)
+def lowest_euclidian_distance(face,model):
     embed = get_embeddings(np.array([face]),model)
     dataset = load('face_embeds_dataset.npz')
     labels_train,embeds_train, images_train = dataset['arr_0'], dataset['arr_1'], dataset['arr_2']
     lowest = 10
-    classification = None
-    image = None
+    classification = "None"
     for i in range(len(embeds_train)):
         for j in range(len(embeds_train[i])):
             dist = get_euclidean_distance(embeds_train[i][j],embed[0])
             if dist < lowest:
                 lowest = dist
                 classification = labels_train[i]
-                image = images_train[i][j]
     if lowest == 10:
-        print("ERROR in finding image")
-        return
-    return lowest,classification,image
+        print("ERROR in finding match: could not find match")
+    return lowest,classification
 
-#same as above, but uses a greedy algorithm with greedy choice being:
-#skip at distance > 1
-#return at distance < 0.6
 
-def lowest_euclidian_distance_greedy(file,model):
-    face = get_face(file)
+#same as above, but uses the following rules:
+#skip at distance > upper bound
+#return at distance < lower bound
+
+def lowest_euclidian_distance_skim(face,model,upper,lower):
     embed = get_embeddings(np.array([face]),model)
     dataset = load('face_embeds_dataset.npz')
     labels_train,embeds_train, images_train = dataset['arr_0'], dataset['arr_1'], dataset['arr_2']
     lowest = 10
-    classification = None
-    image = None
+    classification = "None"
     for i in range(len(embeds_train)):
         for j in range(len(embeds_train[i])):
             dist = get_euclidean_distance(embeds_train[i][j],embed[0])
-            if dist >= 1:
+            if dist >= upper:
                 break
-            if dist <= 0.60:
+            if dist <= lower:
                 lowest = dist
                 classification = labels_train[i]
-                image = images_train[i][j]
-                return lowest,classification,image
+                return lowest,classification
             if dist < lowest:
                 lowest = dist
                 classification = labels_train[i]
-                image = images_train[i][j]
     if lowest == 10:
-        print("ERROR in finding image")
-        return
-    return lowest,classification,image
-
+        print("ERROR in finding match: could not find match")
+    return lowest,classification
+    
+#return list of embeddings that fall below a certain threshold
+def lowest_euclidian_distance_list(face,model,upper,lower):
+    embed = get_embeddings(np.array([face]),model)
+    dataset = load('face_embeds_dataset.npz')
+    labels_train,embeds_train, images_train = dataset['arr_0'], dataset['arr_1'], dataset['arr_2']
+    classification_list = []
+    for i in range(len(embeds_train)):
+        for j in range(len(embeds_train[i])):
+            dist = get_euclidean_distance(embeds_train[i][j],embed[0])
+            if dist >= upper:
+                break
+            if dist <= lower:
+                classification_list.append((labels_train[i],dist)) 
+                break   
+    return classification_list
 
 #add a new face embedding to the dataset
 #directory is the directory of all faces
@@ -223,51 +228,44 @@ def create_dataset(directory,model,force=False):
     print("dataset done, saving...")
     savez_compressed('face_embeds_dataset.npz',labels_train,embeds_train,images_train)
 
-
+    
 def main():
-    model = load_model("./facenet_keras.h5")
-    create_dataset("./data/",model)
-    enc,svm = train_SVM()
-    pred,prob = predict_face(enc,svm,"./data/val/ben_afflek/33.jpg",model)
-    print(pred[0])
-    print(prob)
-    print('------------')
-    dist,classification,image = lowest_euclidian_distance("./data/val/steve_jobs/22.jpg",model)
+  t0 = time.perf_counter()
+  model = load_model("./facenet_keras.h5")
+  t1 = time.perf_counter()
+  print("MODEL LOADED")
+  print("TIME: ",t1-t0)
+  print("---------")
+  t0 = time.perf_counter()
+  camera = PiCamera()
+  camera.resolution  = (1024,768)
+  camera.start_preview()
+  time.sleep(2)
+  t1 = time.perf_counter()
+  print("CAMERA INITIALIZED")
+  print("TIME: ",t1-t0)
+  print("---------")
+  while True:
+    camera.capture('foo.jpg')
+    print("CAMERA CAPTURED IMAGE")
+    t0 = time.perf_counter()
+    f = get_face("./foo.jpg")
+    t1 = time.perf_counter()
+    print("TIME FOR MTCNN: ",t1-t0)
+    print("---------")
+    if f is not None: break
+  b_face = get_face("./data/val/ben_afflek/33.jpg")
+  dist,classification = lowest_euclidian_distance(b_face,model)
+  if(dist != 10):
     print(classification)
     print(dist)
     print('------------')
-    dist,classification,image = lowest_euclidian_distance_greedy("./data/val/steve_jobs/22.jpg",model)
+  dist,classification = lowest_euclidian_distance_skim(b_face,model,1.1,0.6)
+  if(dist != 10):
     print(classification)
     print(dist)
-
+  classification_list = lowest_euclidian_distance_list(b_face,model,1.1,0.65)
+  print(classification_list)
+  
 if __name__ == "__main__":
-    main()
-
-
-
-###############################
-
-## EXTRA DEBUG CODE ##
-
-###############################
-
-    # dataset = load('face_embeds_dataset.npz')
-    # labels_train,embeds_train, images_train = dataset['arr_0'], dataset['arr_1'], dataset['arr_2']
-    # labels_tmp = list(labels_train)
-    # embeds_tmp = list(embeds_train)
-    # images_tmp = list(images_train)
-    # labels_tmp.pop()
-    # embeds_tmp.pop()
-    # images_tmp.pop()
-    # labels_train = np.array(labels_tmp)
-    # embeds_train = np.array(embeds_tmp)
-    # images_train = np.array(images_tmp)
-    # for i in labels_train:
-    #     print(i)
-    # print("----")
-    # for i in embeds_train:
-    #     print(i.shape)
-    # print("----")
-    # for i in images_train:
-    #     print(i.shape)
-    # savez_compressed('face_embeds_dataset.npz',labels_train,embeds_train,images_train)  
+  main()
