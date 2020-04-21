@@ -23,12 +23,17 @@ def get_face(file):
     cropped = cv2.resize(img[y:y+height,x:x+width],IMAGE_SIZE)
     return cropped
 
+
+
 def get_face_frame(frame):
-    IMAGE_SIZE = (160,160)
     faces = detector.detect_faces(frame)
     if len(faces) < 1:
         print('No faces detected')
         return None
+    return faces
+
+def format_face_frame(faces,frame):
+    IMAGE_SIZE = (160,160)
     x,y,width,height = faces[0]["box"]
     cropped = cv2.resize(frame[y:y+height,x:x+width],IMAGE_SIZE)
     return cropped
@@ -120,6 +125,7 @@ def get_face_from_camera():
             if c == 20 or c == -1:
                 face = get_face_frame(frame)
                 if face is not None:
+                    face = format_face_frame(face,frame)
                     break
                 c = 0
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -141,6 +147,8 @@ def main():
     # print(all_embeds)
 
     face = get_face_from_camera()
+    cv2.imshow("face",face)
+    cv2.waitKey(0)
 
 
 
