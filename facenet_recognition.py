@@ -9,11 +9,11 @@ from mtcnn import MTCNN
 import cv2
 import facenet_database as db
 import time
-# from picamera import PiCamera
+
+detector = MTCNN()
 
 def get_face(file):
     IMAGE_SIZE = (160,160)
-    detector = MTCNN()
     img = cv2.cvtColor(cv2.imread(file),cv2.COLOR_BGR2RGB)
     faces = detector.detect_faces(img)
     if len(faces) < 1:
@@ -23,6 +23,15 @@ def get_face(file):
     cropped = cv2.resize(img[y:y+height,x:x+width],IMAGE_SIZE)
     return cropped
 
+def get_face_frame(frame):
+    IMAGE_SIZE = (160,160)
+    faces = detector.detect_faces(frame)
+    if len(faces) < 1:
+        print('No faces detected')
+        return None
+    x,y,width,height = faces[0]["box"]
+    cropped = cv2.resize(frame[y:y+height,x:x+width],IMAGE_SIZE)
+    return cropped
 
 #standardize pixel values
 
@@ -100,22 +109,39 @@ def lowest_euclidian_distance_list(embed,model,upper,lower):
     return classification_list
 
 def get_face_from_camera():
-    camera = PiCamera()
-    camera.resolution  = (1024,768)
-    camera.start_preview()
-    time.sleep(2)
-    while True:
-        camera.capture('f.jpg')
-        f = get_face("./f.jpg")
-        if f is not None: 
-            return f
+
+    cap = cv2.VideoCapture(0)
+    c = -1
+    face = None
+    while(cap.isOpened()):
+        ret, frame = cap.read()
+        if ret==True:
+            cv2.imshow('frame',frame)
+            if c == 20 or c == -1:
+                face = get_face_frame(frame)
+                if face is not None:
+                    break
+                c = 0
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+            c+=1
+            
+        else:
             break
 
+    # Release everything if job is finished
+    cap.release()
+    cv2.destroyAllWindows()
+    return face
+
 def main():
-    model = load_model("./facenet_keras.h5")
-    db_conn = db.init_db()
-    all_embeds = db.getall_from_db(db_conn)
-    print(all_embeds)
+    # model = load_model("./facenet_keras.h5")
+    # db_conn = db.init_db()
+    # all_embeds = db.getall_from_db(db_conn)
+    # print(all_embeds)
+
+    face = get_face_from_camera()
+
 
 
   
